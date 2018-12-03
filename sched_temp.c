@@ -15,7 +15,7 @@ static ucontext_t uctx_shell_mode;
 static ucontext_t uctx_simulation;
 static ucontext_t uctx_saved;
 
-#define DEBUG 0
+#define DEBUG 1
 
 void hw_suspend(int msec_10)
 {
@@ -134,6 +134,12 @@ int hw_task_create(char *task_name)
 	else if(strcmp(task_name,"task6") == 0)
 	{
 	    makecontext(&(node->uctx_task), task6, 0);
+	    insert_task_q(node);
+	    return PID++; // the pid of created task name
+	}
+	if(strcmp(task_name,"test") == 0)
+	{
+	    makecontext(&(node->uctx_task), test, 0);
 	    insert_task_q(node);
 	    return PID++; // the pid of created task name
 	}
@@ -443,7 +449,8 @@ void shell()
 		else if(strcmp(cmd, "ps") == 0)
 		{
 			print_tasks();
-			//print_priority_q();
+			if(DEBUG)
+				print_priority_q();
 		}
 		else if(strcmp(cmd, "remove") == 0)
 		{
@@ -458,18 +465,18 @@ void shell()
 			if(current == NULL) //first time start or running task is removed
 			{
 				shell_active = false;
-				printf("simulating...\nPress ctrl+z to pause\n");
+				printf("simulating...\n");
 				setTimer(saved_timer_usec); /* Restore interval timer */
 				swapcontext(&uctx_shell_mode, &uctx_simulation);
 				shell_active = true;
-				//if(DEBUG) printf("shell: Back to shell mode\n");
+				if(DEBUG) printf("shell: Back to shell mode\n");
 			}
 			else
 			{
-				//if(DEBUG) printf("shell: Returning from shell to task\n");
+				if(DEBUG) printf("shell: Returning from shell to task\n");
 				setTimer(saved_timer_usec); /* Restore interval timer */
 				shell_active = false;
-				printf("simulating...\nPress ctrl+z to pause\n");
+				printf("simulating...\n");
 		    	swapcontext(&uctx_shell_mode, &uctx_saved);
 		    	shell_active = true;
 			}
@@ -491,8 +498,8 @@ void catcher( int sig ) {
     		{
     			Task_node* prev = current;
 		    	reschedule();
-		    	// if(DEBUG)
-			    // 	printf("catcher: swap to task %s(%d)\n", current->task_name, current->pid);
+		    	if(DEBUG)
+			    	printf("catcher: swap to task %s(%d)\n", current->task_name, current->pid);
 		    	swapcontext(&(prev->uctx_task), &(current->uctx_task));
     		}
     	}   	
@@ -501,60 +508,77 @@ void catcher( int sig ) {
     {
     	if(!shell_active)
     	{
+	    	printf( "Catched signal SIGSTP\n");
 	    	struct itimerval value;
 	    	getitimer(ITIMER_REAL, &value);
 	    	saved_timer_usec = value.it_value.tv_usec;
 	    	setTimer(0); // disable timer
-	    	printf("\n");
-	    	if(DEBUG) printf("catcher SIGTSTP: Switch to shell mode\n");
+	    	if(DEBUG) printf("catcher: Switch to shell mode\n");
 	    	swapcontext(&uctx_saved, &uctx_shell_mode);
     	}
     }
+    // else if(sig == SIGSEGV)
+    // {
+    // 	if(DEBUG) printf("catcher: segmentation fault\n");
+    // 	setcontext(&uctx_simulation);
+    // }
+}
+void test()
+{
+	printf("test task_executing\n");
+	printf("test finished\n");
+}
+Task_node* addtest()
+{
+    hw_task_create("test");
+    return task_queue_head;
 }
 void simulate()
 {
 	//Set a real time interval timer to send SIGALRM signal
-	setTimer(10000); //10000 usec = 10 msec
+	setTimer(10000);
 	
 	while(1)
     {
     	current = NULL;
     	reschedule(); //will modify Task_node *current and set timer
-    	if(current == NULL && DEBUG) printf("No task is executing\n");
 		while(current == NULL)
 		{
+			//printf("No task to execute\n");
+			//swapcontext(&uctx_simulation, &uctx_shell_mode);
 			reschedule();
 		}
 		task_executing = true;
 		catcher_count = 0;
-		if(DEBUG) printf("Executing task(s)...\n");
-		// if(DEBUG)
-	 //    	printf("simulate: swap to task %s(%d)\n", current->task_name, current->pid);
+		if(DEBUG)
+	    	printf("simulate: swap to task %s(%d)\n", current->task_name, current->pid);
 		if (swapcontext(&uctx_simulation, &(current->uctx_task)) == -1)
 	        error("swapcontext");
+	    if(DEBUG)
+	    	printf("simulate: returned from first task\n");
 
      	//handle task termination
      	while(task_executing == true)
      	{
+     		//setTimer(0); //disable timer
+	     	if(DEBUG) printf("control back to simulate()\n");
 	     	if(current!=NULL) //running task is not removed; running task terminated
-	     	{
-				if(DEBUG) printf("current running task terminated.\n");
 	     		current->task_state = TASK_TERMINATED;
-	     	}
 	     	current = NULL;
 	     	reschedule();
-	     	//if(DEBUG) printf("rescheduled\n");
+	     	if(DEBUG) printf("rescheduled\n");
 	     	if(current == NULL)
 			{
+				printf("All tasks finished executing\n");
 				task_executing = false;
+				//swapcontext(&uctx_simulation, &uctx_shell_mode);
 				break;
 			}
-			catcher_count = 0;
-			if(DEBUG) printf("Executing next task(s)...\n");
-	     	// if(DEBUG)
-	     	// {
-		    	// printf("simulate: swap to task %s(%d)\n", current->task_name, current->pid);
-	     	// }	     	
+	     	if(DEBUG)
+	     	{
+		    	printf("simulate: swap to task %s(%d)\n", current->task_name, current->pid);
+	     	}
+	     	catcher_count = 0;
 			if(swapcontext(&uctx_simulation, &(current->uctx_task)) == -1)
 			{
 		        error("swapcontext");
@@ -626,7 +650,7 @@ void setTimer(int time_usec)
     value.it_interval.tv_sec = 0;        /* Zero seconds */
     value.it_interval.tv_usec = 10000;  /* Ten milliseconds */
     value.it_value.tv_sec = 0;           /* Zero seconds */
-    value.it_value.tv_usec = time_usec;
+    value.it_value.tv_usec = time_usec;     /* Twenty milliseconds */
 
     setitimer( ITIMER_REAL, &value, &ovalue );
 }
@@ -668,6 +692,7 @@ int main()
     //setup for signal handler
 	signal(SIGTSTP, catcher);
 	signal(SIGALRM, catcher);
+	//signal(SIGSEGV, catcher);
 
 	shell();
 	return 0;
