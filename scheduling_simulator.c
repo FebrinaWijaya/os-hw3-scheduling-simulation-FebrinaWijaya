@@ -13,7 +13,7 @@ bool shell_active = true; //remove later
 
 static ucontext_t uctx_shell_mode;
 static ucontext_t uctx_simulation;
-static ucontext_t uctx_saved;
+//static ucontext_t uctx_saved;
 
 #define DEBUG 0
 
@@ -40,7 +40,7 @@ void hw_wakeup_pid(int pid)
 			if(temp->pid == pid  && temp->task_state == TASK_WAITING)
 			{
 				temp->task_state = TASK_READY;
-				temp->queue_time = 0;
+				temp->suspend_time = 0;
 				break;
 			}
 			temp = temp->next;
@@ -62,7 +62,7 @@ int hw_wakeup_taskname(char *task_name)
 			if(strcmp(temp->task_name, task_name) == 0 && temp->task_state == TASK_WAITING)
 			{
 				temp->task_state = TASK_READY;
-				temp->queue_time = 0;
+				temp->suspend_time = 0;
 				count++;
 			}
 			temp = temp->next;
@@ -424,6 +424,7 @@ void shell()
 			memset(opt,0,3);
 			memset(arg,0,2);
 			char *token;
+			//check if user specifies time quantum and priority of task
 			token = strtok(NULL, " \n");
 			while(token!=NULL)
 			{
@@ -455,24 +456,26 @@ void shell()
 		}
 		else if(strcmp(cmd, "start") == 0)
 		{
+			shell_active = false;
+			setTimer(saved_timer_usec); /* Restore interval timer */
+			printf("simulating...\nPress ctrl+z to pause\n");
 			if(current == NULL) //first time start or running task is removed
 			{
-				shell_active = false;
-				printf("simulating...\nPress ctrl+z to pause\n");
-				setTimer(saved_timer_usec); /* Restore interval timer */
 				swapcontext(&uctx_shell_mode, &uctx_simulation);
-				shell_active = true;
 				//if(DEBUG) printf("shell: Back to shell mode\n");
 			}
 			else
 			{
 				//if(DEBUG) printf("shell: Returning from shell to task\n");
-				setTimer(saved_timer_usec); /* Restore interval timer */
-				shell_active = false;
-				printf("simulating...\nPress ctrl+z to pause\n");
-		    	swapcontext(&uctx_shell_mode, &uctx_saved);
-		    	shell_active = true;
+		    	swapcontext(&uctx_shell_mode, &(current->uctx_task));
 			}
+			shell_active = true;
+		}
+		else
+		{
+			char tmp[100];
+			fgets(tmp,sizeof(tmp),stdin);
+			printf("Unknown command: %s\n", cmd);
 		}
 	}	
 }
@@ -480,7 +483,7 @@ void catcher( int sig ) {
     if(sig == SIGALRM)
     {
     	//printf( "Catched signal SIGALRM\n");
-    	updateQueueTime(10);
+    	updateTaskTime(); //update queue time and suspend time
     	
     	if(current!=NULL)
     	{
@@ -507,7 +510,10 @@ void catcher( int sig ) {
 	    	setTimer(0); // disable timer
 	    	printf("\n");
 	    	if(DEBUG) printf("catcher SIGTSTP: Switch to shell mode\n");
-	    	swapcontext(&uctx_saved, &uctx_shell_mode);
+	    	if(current!=NULL)
+	    		swapcontext(&(current->uctx_task), &uctx_shell_mode);
+	    	else
+	    		swapcontext(&uctx_simulation, &uctx_shell_mode);
     	}
     }
 }
@@ -519,11 +525,11 @@ void simulate()
 	while(1)
     {
     	current = NULL;
-    	reschedule(); //will modify Task_node *current and set timer
+    	reschedule(); //find a task to execute and assign it to Task_node *current
     	if(current == NULL && DEBUG) printf("No task is executing\n");
 		while(current == NULL)
 		{
-			reschedule();
+			reschedule(); //loop until a task to execute is found
 		}
 		task_executing = true;
 		catcher_count = 0;
@@ -533,7 +539,7 @@ void simulate()
 		if (swapcontext(&uctx_simulation, &(current->uctx_task)) == -1)
 	        error("swapcontext");
 
-     	//handle task termination
+     	//handle task termination and removal of running task
      	while(task_executing == true)
      	{
 	     	if(current!=NULL) //running task is not removed; running task terminated
@@ -549,7 +555,7 @@ void simulate()
 				task_executing = false;
 				break;
 			}
-			catcher_count = 0;
+			catcher_count = 0; //for task with large time quantum
 			if(DEBUG) printf("Executing next task(s)...\n");
 	     	// if(DEBUG)
 	     	// {
@@ -631,7 +637,7 @@ void setTimer(int time_usec)
     setitimer( ITIMER_REAL, &value, &ovalue );
 }
 
-void updateQueueTime(int time)
+void updateTaskTime()
 {
 	//printf("update task time\n");
 	Task_node* temp = task_queue_head;
@@ -642,10 +648,10 @@ void updateQueueTime(int time)
 		while(temp!=NULL)
 		{
 			if(temp->task_state == TASK_READY)
-				temp->queue_time += time;
+				temp->queue_time += 10;
 			else if(temp->task_state == TASK_WAITING)
 			{
-				temp->suspend_time -= time;
+				temp->suspend_time -= 10;
 				if(temp->suspend_time <= 0)
 					temp->task_state = TASK_READY;
 			}
