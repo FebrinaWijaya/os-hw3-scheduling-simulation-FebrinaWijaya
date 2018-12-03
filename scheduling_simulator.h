@@ -51,7 +51,7 @@ int remove_priority_q(char priority, Task_node *task);
 int set_task_priority(int pid, char priority); //change task priority to H(high) if specified by user
 int set_task_tquantum(int pid, char tquantum); //change task quantum time to L(large) if specified by user
 void print_tasks();
-void print_priority_q();
+//void print_priority_q();
 void shell();
 void catcher( int sig );
 void simulate();
