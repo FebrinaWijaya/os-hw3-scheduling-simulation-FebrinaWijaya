@@ -355,7 +355,7 @@ void catcher( int sig )
 {
     if(sig == SIGALRM) {
         //printf( "Catched signal SIGALRM\n");
-        updateTaskTime(); //update queue time and suspend time
+        updateTaskTime(10); //update queue time and suspend time
 
         if(current!=NULL) {
             if(current->time_quantum == 'L')
@@ -371,9 +371,7 @@ void catcher( int sig )
         }
     } else if(sig == SIGTSTP) {
         if(!shell_active) {
-            struct itimerval value;
-            getitimer(ITIMER_REAL, &value);
-            saved_timer_usec = value.it_value.tv_usec;
+            saved_timer_usec = getCurrentTime();
             setTimer(0); // disable timer
             printf("\n");
             if(DEBUG) printf("catcher SIGTSTP: Switch to shell mode\n");
@@ -387,7 +385,7 @@ void catcher( int sig )
 void simulate()
 {
     //Set a real time interval timer to send SIGALRM signal
-    setTimer(10000); //10000 usec = 10 msec
+    //setTimer(10000); //10000 usec = 10 msec
 
     while(1) {
         current = NULL;
@@ -401,8 +399,11 @@ void simulate()
         if(DEBUG) printf("Executing task(s)...\n");
         // if(DEBUG)
         //    	printf("simulate: swap to task %s(%d)\n", current->task_name, current->pid);
+        setTimer(10000);
         if (swapcontext(&uctx_simulation, &(current->uctx_task)) == -1)
             error("swapcontext");
+        //last time quantum used before task terminated or removed
+        updateTaskTime(10 - getCurrentTime()/1000);
 
         //handle task termination and removal of running task
         while(task_executing == true) {
@@ -423,9 +424,13 @@ void simulate()
             // {
             // printf("simulate: swap to task %s(%d)\n", current->task_name, current->pid);
             // }
+
+            setTimer(10000);
             if(swapcontext(&uctx_simulation, &(current->uctx_task)) == -1) {
                 error("swapcontext");
             }
+            //last time quantum used before task terminated or removed
+            updateTaskTime(10 - getCurrentTime()/1000);
         }
     }
 }
@@ -486,7 +491,14 @@ void setTimer(int time_usec)
     setitimer( ITIMER_REAL, &value, &ovalue );
 }
 
-void updateTaskTime()
+int getCurrentTime()
+{
+    struct itimerval value;
+    getitimer(ITIMER_REAL, &value);
+    return value.it_value.tv_usec;
+}
+
+void updateTaskTime(int msec)
 {
     //printf("update task time\n");
     Task_node* temp = task_queue_head;
@@ -495,9 +507,9 @@ void updateTaskTime()
     else {
         while(temp!=NULL) {
             if(temp->task_state == TASK_READY)
-                temp->queue_time += 10;
+                temp->queue_time += msec;
             else if(temp->task_state == TASK_WAITING) {
-                temp->suspend_time -= 10;
+                temp->suspend_time -= msec;
                 if(temp->suspend_time <= 0)
                     temp->task_state = TASK_READY;
             }

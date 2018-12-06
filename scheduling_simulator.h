@@ -57,6 +57,7 @@ void catcher( int sig );
 void simulate();
 void reschedule();
 void setTimer(int time_usec); //if time_usec==0, disable timer
-void updateTaskTime(); //update queue time and suspend time
+void updateTaskTime(int msec); //update queue time and suspend time
+int getCurrentTime();
 
 #endif
